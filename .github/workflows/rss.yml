@@ -1,0 +1,34 @@
+name: Generate TamilMV RSS
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run scraper
+        run: |
+          python tamilmv_rss.py
+
+      - name: Commit & Push RSS
+        run: |
+          git config --global user.name "rss-bot"
+          git config --global user.email "rss@bot.com"
+          git add tamilmv.xml
+          git commit -m "Update TamilMV RSS" || echo "No changes"
+          git push
