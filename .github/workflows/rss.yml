@@ -5,7 +5,7 @@ permissions:
 
 on:
   schedule:
-    - cron: "*/5 * * * *"  # every 5 mins
+    - cron: "*/5 * * * *"   # Every 5 minutes
   workflow_dispatch:
 
 jobs:
@@ -13,7 +13,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -22,16 +23,21 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install cloudscraper beautifulsoup4 lxml
+          pip install -r requirements.txt
 
-      - name: Run scraper
+      - name: Run RSS scraper
         run: |
           python tamilmv_rss.py
 
-      - name: Commit & Push RSS if changed
+      - name: Commit & Push RSS (only if changed)
         run: |
           git config --global user.name "rss-bot"
           git config --global user.email "rss@bot.com"
-          git add tamilmv.xml
-          git diff --cached --quiet || git commit -m "Update TamilMV RSS"
-          git push
+
+          if [[ `git status --porcelain` ]]; then
+            git add tamilmv.xml state.json
+            git commit -m "Update TamilMV RSS"
+            git push
+          else
+            echo "No changes, skipping commit"
+          fi
