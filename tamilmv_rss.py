@@ -4,7 +4,7 @@ from datetime import datetime
 from xml.etree.ElementTree import Element, SubElement, ElementTree
 
 # =============== CONFIG =================
-BASE_URL = "https://www.1tamilmv.rsvp/"
+BASE_URL = "https://www.1tamilmv.earth/"
 OUT_FILE = "tamilmv.xml"
 STATE_FILE = "state.json"
 
