@@ -3,6 +3,7 @@ from datetime import datetime
 from xml.etree.ElementTree import Element, SubElement, ElementTree
 from playwright.sync_api import sync_playwright
 from bs4 import BeautifulSoup
+from urllib.parse import urljoin
 
 # ================= CONFIG =================
 BASE_URL = "https://www.1tamilmv.cymru/"
@@ -11,6 +12,7 @@ STATE_FILE = "state.json"
 
 MAX_TOPICS = 20
 MAX_ITEMS = 25
+MAX_STATE = 500   # prevent large state file
 
 # ================= STATE =================
 if os.path.exists(STATE_FILE):
@@ -34,16 +36,20 @@ SubElement(channel, "lastBuildDate").text = datetime.utcnow().strftime(
 
 # ================= HELPERS =================
 def clean_title(title):
-    return re.sub(r"1TamilMV\s*[-–]\s*", "", title).strip()
+    title = re.sub(r"1TamilMV\s*[-–]\s*", "", title)
+    return title.split("|")[0].strip()
 
 # ================= SCRAPER =================
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True)
-    page = browser.new_page()
+
+    page = browser.new_page(
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    )
 
     print("Opening homepage...")
     page.goto(BASE_URL, timeout=60000)
-    page.wait_for_timeout(5000)
+    page.wait_for_load_state("networkidle")
 
     html = page.content()
     soup = BeautifulSoup(html, "lxml")
@@ -52,12 +58,10 @@ with sync_playwright() as p:
     topics = []
     for a in soup.find_all("a", href=True):
         if "topic" in a["href"]:
-            link = a["href"]
-            if not link.startswith("http"):
-                link = BASE_URL.rstrip("/") + link
+            link = urljoin(BASE_URL, a["href"])
             topics.append(link)
 
-    topics = list(dict.fromkeys(topics))[:MAX_TOPICS]
+    topics = list(set(topics))[:MAX_TOPICS]
     print("Topics:", len(topics))
 
     added = 0
@@ -69,7 +73,7 @@ with sync_playwright() as p:
         try:
             print("Opening:", url)
             page.goto(url, timeout=60000)
-            page.wait_for_timeout(4000)
+            page.wait_for_load_state("networkidle")
 
             html = page.content()
             psoup = BeautifulSoup(html, "lxml")
@@ -113,10 +117,14 @@ with sync_playwright() as p:
 
     browser.close()
 
-# ================= SAVE =================
+# ================= SAVE XML =================
 ElementTree(rss).write(OUT_FILE, encoding="utf-8", xml_declaration=True)
 
+# ================= SAVE STATE =================
+# limit size to prevent huge file
+seen_list = list(seen)[-MAX_STATE:]
+
 with open(STATE_FILE, "w") as f:
-    json.dump({"magnets": list(seen)}, f, indent=2)
+    json.dump({"magnets": seen_list}, f, indent=2)
 
 print("DONE | Items:", added)
