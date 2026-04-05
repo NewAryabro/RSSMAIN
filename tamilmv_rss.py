@@ -1,26 +1,18 @@
-import cloudscraper, time, json, os, re
-from bs4 import BeautifulSoup
+import time, json, os, re
 from datetime import datetime
 from xml.etree.ElementTree import Element, SubElement, ElementTree
+from playwright.sync_api import sync_playwright
+from bs4 import BeautifulSoup
 
 # ================= CONFIG =================
 BASE_URL = "https://www.1tamilmv.cymru/"
 OUT_FILE = "tamilmv.xml"
 STATE_FILE = "state.json"
 
-MAX_TOPICS = 30
+MAX_TOPICS = 20
 MAX_ITEMS = 25
-DELAY = 0.5
 
-MOVIE_MAX_GB = 4
-SERIES_MIN_GB = 4
-# ==========================================
-
-scraper = cloudscraper.create_scraper(
-    browser={"browser": "chrome", "platform": "windows", "mobile": False}
-)
-
-# ================= STATE ==================
+# ================= STATE =================
 if os.path.exists(STATE_FILE):
     with open(STATE_FILE, "r") as f:
         state = json.load(f)
@@ -29,158 +21,102 @@ else:
 
 seen = set(state.get("magnets", []))
 
-# ================= RSS ====================
+# ================= RSS =================
 rss = Element("rss", version="2.0")
 channel = SubElement(rss, "channel")
 
-SubElement(channel, "title").text = "1TamilMV Torrent RSS"
+SubElement(channel, "title").text = "TamilMV RSS"
 SubElement(channel, "link").text = BASE_URL
-SubElement(channel, "description").text = "Auto RSS – Smart Scraper"
+SubElement(channel, "description").text = "Auto RSS Playwright Scraper"
 SubElement(channel, "lastBuildDate").text = datetime.utcnow().strftime(
     "%a, %d %b %Y %H:%M:%S GMT"
 )
 
 # ================= HELPERS =================
-def is_series(title):
-    t = title.lower()
-    return any(x in t for x in ["season", "episode", "s01", "s02", "series"])
-
-def size_from_text(text):
-    m = re.search(r'(\d+(?:\.\d+)?)\s*(GB|MB)', text.upper())
-    if not m:
-        return None
-    size = float(m.group(1))
-    if m.group(2) == "MB":
-        size /= 1024
-    return size
-
 def clean_title(title):
     return re.sub(r"1TamilMV\s*[-–]\s*", "", title).strip()
 
-# ================= FETCH HOME =================
-home = scraper.get(BASE_URL, timeout=30)
-print("HOME STATUS:", home.status_code)
+# ================= SCRAPER =================
+with sync_playwright() as p:
+    browser = p.chromium.launch(headless=True)
+    page = browser.new_page()
 
-soup = BeautifulSoup(home.text, "lxml")
-print("HOME TITLE:", soup.title)
+    print("Opening homepage...")
+    page.goto(BASE_URL, timeout=60000)
+    page.wait_for_timeout(5000)
 
-if home.status_code != 200 or soup.title is None:
-    print("❌ Cloudflare or Block detected")
-    exit()
+    html = page.content()
+    soup = BeautifulSoup(html, "lxml")
 
-# ================= COLLECT TOPICS =================
-topics = []
+    # collect topics
+    topics = []
+    for a in soup.find_all("a", href=True):
+        if "topic" in a["href"]:
+            link = a["href"]
+            if not link.startswith("http"):
+                link = BASE_URL.rstrip("/") + link
+            topics.append(link)
 
-for a in soup.find_all("a", href=True):
-    href = a["href"]
+    topics = list(dict.fromkeys(topics))[:MAX_TOPICS]
+    print("Topics:", len(topics))
 
-    if "topic" in href.lower():
-        if not href.startswith("http"):
-            href = BASE_URL.rstrip("/") + href
-        topics.append(href)
+    added = 0
 
-topics = list(dict.fromkeys(topics))[:MAX_TOPICS]
+    for url in topics:
+        if added >= MAX_ITEMS:
+            break
 
-print("TOPICS FOUND:", len(topics))
+        try:
+            print("Opening:", url)
+            page.goto(url, timeout=60000)
+            page.wait_for_timeout(4000)
 
-# ================= SCRAPE =================
-added = 0
+            html = page.content()
+            psoup = BeautifulSoup(html, "lxml")
 
-for url in topics:
-    if added >= MAX_ITEMS:
-        break
-
-    try:
-        time.sleep(DELAY)
-
-        page = scraper.get(url, timeout=30)
-        if page.status_code != 200:
-            continue
-
-        psoup = BeautifulSoup(page.text, "lxml")
-
-        if psoup.title is None:
-            continue
-
-        raw_title = psoup.title.get_text(strip=True)
-        title = clean_title(raw_title)
-
-        print("\n🔎 CHECKING:", title)
-
-        size = size_from_text(title)
-
-        # Apply size rules only if size exists
-        if size:
-            if is_series(title):
-                if size < SERIES_MIN_GB:
-                    continue
-            else:
-                if size > MOVIE_MAX_GB:
-                    continue
-
-        # ================= MAGNET EXTRACTION =================
-        magnets = []
-
-        # 1️⃣ Direct magnets
-        for a in psoup.find_all("a", href=True):
-            href = a["href"]
-            if href.startswith("magnet:?"):
-                magnets.append(href)
-
-        # 2️⃣ Second-level scraping (download pages)
-        if not magnets:
-            for a in psoup.find_all("a", href=True):
-                href = a["href"]
-
-                if any(x in href.lower() for x in ["download", "view", "open"]):
-                    try:
-                        if not href.startswith("http"):
-                            href = BASE_URL.rstrip("/") + href
-
-                        sub_page = scraper.get(href, timeout=20)
-                        sub_soup = BeautifulSoup(sub_page.text, "lxml")
-
-                        for sub_a in sub_soup.find_all("a", href=True):
-                            if sub_a["href"].startswith("magnet:?"):
-                                magnets.append(sub_a["href"])
-
-                    except:
-                        pass
-
-        print("MAGNETS FOUND:", len(magnets))
-
-        if not magnets:
-            continue
-
-        # ================= ADD TO RSS =================
-        for magnet in magnets:
-            if magnet in seen:
+            title_tag = psoup.title
+            if not title_tag:
                 continue
 
-            item = SubElement(channel, "item")
-            SubElement(item, "title").text = (
-                f"{title} [{round(size,2)}GB]" if size else title
-            )
-            SubElement(item, "link").text = magnet
-            SubElement(item, "guid").text = magnet
-            SubElement(item, "pubDate").text = datetime.utcnow().strftime(
-                "%a, %d %b %Y %H:%M:%S GMT"
-            )
+            title = clean_title(title_tag.get_text(strip=True))
 
-            seen.add(magnet)
-            added += 1
-            print("➕ ADDED:", title)
+            # extract magnets
+            magnets = []
+            for a in psoup.find_all("a", href=True):
+                if a["href"].startswith("magnet:?"):
+                    magnets.append(a["href"])
 
-            if added >= MAX_ITEMS:
-                break
+            if not magnets:
+                continue
 
-    except Exception as e:
-        print("ERROR:", url, e)
+            for magnet in magnets:
+                if magnet in seen:
+                    continue
 
-# ================= SAVE ====================
+                item = SubElement(channel, "item")
+                SubElement(item, "title").text = title
+                SubElement(item, "link").text = magnet
+                SubElement(item, "guid").text = magnet
+                SubElement(item, "pubDate").text = datetime.utcnow().strftime(
+                    "%a, %d %b %Y %H:%M:%S GMT"
+                )
+
+                seen.add(magnet)
+                added += 1
+                print("ADDED:", title)
+
+                if added >= MAX_ITEMS:
+                    break
+
+        except Exception as e:
+            print("ERROR:", e)
+
+    browser.close()
+
+# ================= SAVE =================
 ElementTree(rss).write(OUT_FILE, encoding="utf-8", xml_declaration=True)
 
 with open(STATE_FILE, "w") as f:
     json.dump({"magnets": list(seen)}, f, indent=2)
 
-print("\n✅ DONE | Added:", added)
+print("DONE | Items:", added)
