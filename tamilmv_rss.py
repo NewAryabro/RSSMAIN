@@ -8,9 +8,9 @@ BASE_URL = "https://www.1tamilmv.cymru/"
 OUT_FILE = "tamilmv.xml"
 STATE_FILE = "state.json"
 
-MAX_TOPICS = 30        # keep small for fast runtime
+MAX_TOPICS = 30
 MAX_ITEMS = 25
-DELAY = 0.5            # faster workflow
+DELAY = 0.5
 
 MOVIE_MAX_GB = 4
 SERIES_MIN_GB = 4
@@ -35,7 +35,7 @@ channel = SubElement(rss, "channel")
 
 SubElement(channel, "title").text = "1TamilMV Torrent RSS"
 SubElement(channel, "link").text = BASE_URL
-SubElement(channel, "description").text = "Auto RSS – ≤4GB Movies / ≥4GB Series"
+SubElement(channel, "description").text = "Auto RSS – Smart Scraper"
 SubElement(channel, "lastBuildDate").text = datetime.utcnow().strftime(
     "%a, %d %b %Y %H:%M:%S GMT"
 )
@@ -65,7 +65,7 @@ soup = BeautifulSoup(home.text, "lxml")
 print("HOME TITLE:", soup.title)
 
 if home.status_code != 200 or soup.title is None:
-    print("⚠ Possible Cloudflare block")
+    print("❌ Cloudflare or Block detected")
     exit()
 
 # ================= COLLECT TOPICS =================
@@ -105,9 +105,11 @@ for url in topics:
         raw_title = psoup.title.get_text(strip=True)
         title = clean_title(raw_title)
 
+        print("\n🔎 CHECKING:", title)
+
         size = size_from_text(title)
 
-        # Apply size rules ONLY if size exists
+        # Apply size rules only if size exists
         if size:
             if is_series(title):
                 if size < SERIES_MIN_GB:
@@ -116,15 +118,41 @@ for url in topics:
                 if size > MOVIE_MAX_GB:
                     continue
 
-        # 🔥 Proper magnet extraction
+        # ================= MAGNET EXTRACTION =================
         magnets = []
+
+        # 1️⃣ Direct magnets
         for a in psoup.find_all("a", href=True):
-            if a["href"].startswith("magnet:?"):
-                magnets.append(a["href"])
+            href = a["href"]
+            if href.startswith("magnet:?"):
+                magnets.append(href)
+
+        # 2️⃣ Second-level scraping (download pages)
+        if not magnets:
+            for a in psoup.find_all("a", href=True):
+                href = a["href"]
+
+                if any(x in href.lower() for x in ["download", "view", "open"]):
+                    try:
+                        if not href.startswith("http"):
+                            href = BASE_URL.rstrip("/") + href
+
+                        sub_page = scraper.get(href, timeout=20)
+                        sub_soup = BeautifulSoup(sub_page.text, "lxml")
+
+                        for sub_a in sub_soup.find_all("a", href=True):
+                            if sub_a["href"].startswith("magnet:?"):
+                                magnets.append(sub_a["href"])
+
+                    except:
+                        pass
+
+        print("MAGNETS FOUND:", len(magnets))
 
         if not magnets:
             continue
 
+        # ================= ADD TO RSS =================
         for magnet in magnets:
             if magnet in seen:
                 continue
@@ -155,4 +183,4 @@ ElementTree(rss).write(OUT_FILE, encoding="utf-8", xml_declaration=True)
 with open(STATE_FILE, "w") as f:
     json.dump({"magnets": list(seen)}, f, indent=2)
 
-print("✅ DONE | Added:", added)
+print("\n✅ DONE | Added:", added)
