@@ -12,7 +12,7 @@ STATE_FILE = "state.json"
 
 MAX_TOPICS = 20
 MAX_ITEMS = 25
-MAX_STATE = 500   # prevent large state file
+MAX_STATE = 500
 
 # ================= STATE =================
 if os.path.exists(STATE_FILE):
@@ -54,7 +54,6 @@ with sync_playwright() as p:
     html = page.content()
     soup = BeautifulSoup(html, "lxml")
 
-    # collect topics
     topics = []
     for a in soup.find_all("a", href=True):
         if "topic" in a["href"]:
@@ -84,7 +83,6 @@ with sync_playwright() as p:
 
             title = clean_title(title_tag.get_text(strip=True))
 
-            # extract magnets
             magnets = []
             for a in psoup.find_all("a", href=True):
                 if a["href"].startswith("magnet:?"):
@@ -121,7 +119,6 @@ with sync_playwright() as p:
 ElementTree(rss).write(OUT_FILE, encoding="utf-8", xml_declaration=True)
 
 # ================= SAVE STATE =================
-# limit size to prevent huge file
 seen_list = list(seen)[-MAX_STATE:]
 
 with open(STATE_FILE, "w") as f:
